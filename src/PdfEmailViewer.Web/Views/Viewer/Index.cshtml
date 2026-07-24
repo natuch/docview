@@ -1,0 +1,37 @@
+@{
+    ViewData["Title"] = "Viewer";
+    var documentId = ViewData["DocumentId"];
+    var displayName = ViewData["DisplayName"] as string ?? "Document";
+}
+
+@section Styles {
+    <link rel="stylesheet" href="~/css/viewer.css" asp-append-version="true" />
+}
+
+<div id="viewer-root" class="pdf-viewer" data-document-id="@documentId" data-stream-url="/Viewer/@documentId/stream">
+    <div class="toolbar">
+        <div class="toolbar-group">
+            <button id="btn-prev" type="button" title="หน้าก่อนหน้า">&#8592;</button>
+            <span class="page-indicator">
+                <input id="page-input" type="number" min="1" value="1" />
+                <span>/ <span id="page-count">-</span></span>
+            </span>
+            <button id="btn-next" type="button" title="หน้าถัดไป">&#8594;</button>
+        </div>
+        <div class="toolbar-group toolbar-title" title="@displayName">@displayName</div>
+        <div class="toolbar-group">
+            <button id="btn-zoom-out" type="button" title="ย่อ">&#8722;</button>
+            <span id="zoom-level">100%</span>
+            <button id="btn-zoom-in" type="button" title="ขยาย">&#43;</button>
+            <button id="btn-rotate" type="button" title="หมุน">&#8635;</button>
+        </div>
+    </div>
+    <div id="canvas-container" class="canvas-container" oncontextmenu="return false;">
+        <canvas id="pdf-canvas"></canvas>
+    </div>
+</div>
+
+@section Scripts {
+    <script type="module" src="~/js/viewer.js" asp-append-version="true"></script>
+    <script src="~/js/protect.js" asp-append-version="true"></script>
+}

@@ -1,0 +1,71 @@
+@{
+    ViewData["Title"] = "Document Viewer";
+}
+
+<div class="upload-card">
+    <h1>Document Viewer</h1>
+    <p class="subtitle">อัปโหลดไฟล์ PDF หรือ Email (.eml / .msg) เพื่อดูผ่านหน้าเว็บ</p>
+
+    @if (!ViewData.ModelState.IsValid)
+    {
+        <div class="alert">
+            @foreach (var error in ViewData.ModelState.Values.SelectMany(v => v.Errors))
+            {
+                <div>@error.ErrorMessage</div>
+            }
+        </div>
+    }
+
+    <form asp-controller="Home" asp-action="Upload" method="post" enctype="multipart/form-data">
+        @Html.AntiForgeryToken()
+        <input type="file" name="file" accept=".pdf,.eml,.msg" required />
+        <button type="submit">เปิดดูเอกสาร</button>
+    </form>
+</div>
+
+<style>
+    .upload-card {
+        max-width: 480px;
+        margin: 80px auto;
+        padding: 32px;
+        border: 1px solid #ddd;
+        border-radius: 12px;
+        text-align: center;
+        font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+    }
+
+    .upload-card h1 {
+        font-size: 22px;
+        margin-bottom: 4px;
+    }
+
+    .subtitle {
+        color: #666;
+        margin-bottom: 24px;
+    }
+
+    .upload-card form {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+    }
+
+    .upload-card button {
+        padding: 10px 16px;
+        border: none;
+        border-radius: 6px;
+        background: #2563eb;
+        color: #fff;
+        font-size: 14px;
+        cursor: pointer;
+    }
+
+    .alert {
+        background: #fee2e2;
+        color: #991b1b;
+        padding: 10px 14px;
+        border-radius: 6px;
+        margin-bottom: 16px;
+        text-align: left;
+    }
+</style>
