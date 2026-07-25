@@ -15,9 +15,11 @@ body {
 
 .toolbar {
     display: flex;
+    flex-wrap: wrap;
+    flex-shrink: 0;
     align-items: center;
-    justify-content: space-between;
-    gap: 12px;
+    justify-content: center;
+    gap: 8px 12px;
     padding: 8px 16px;
     background: #f3f4f6;
     border: 1px solid #e5e7eb;

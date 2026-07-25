@@ -57,7 +57,7 @@ async function loadDocument() {
 
     await buildPages();
     await renderAllPages();
-    buildThumbnails().catch((err) => console.error(err));
+    await scheduleThumbnailBuild();
 }
 
 async function buildPages() {
@@ -144,6 +144,50 @@ async function rerenderAllPages() {
         entry.wrapper.scrollIntoView({ behavior: "auto", block: "start" });
         window.setTimeout(() => { suppressScrollTracking = false; }, 300);
     }
+}
+
+// Zoom/rotate both end up re-rendering every page's canvas. Two overlapping
+// calls (e.g. from a rapid double-click) would each try to render the same
+// canvas at once, which pdf.js rejects outright - serialize requests instead
+// and coalesce a queued one into a single trailing run against the latest
+// scale/rotation, rather than piling up redundant renders.
+let rerenderInFlight = false;
+let rerenderQueued = false;
+let thumbnailsNeedRebuild = false;
+
+async function requestRerender(rebuildThumbnails) {
+    if (rebuildThumbnails) thumbnailsNeedRebuild = true;
+
+    if (rerenderInFlight) {
+        rerenderQueued = true;
+        return;
+    }
+
+    rerenderInFlight = true;
+    try {
+        do {
+            rerenderQueued = false;
+            await rerenderAllPages();
+            if (thumbnailsNeedRebuild) {
+                thumbnailsNeedRebuild = false;
+                await scheduleThumbnailBuild();
+            }
+        } while (rerenderQueued);
+    } catch (err) {
+        console.error(err);
+    } finally {
+        rerenderInFlight = false;
+    }
+}
+
+// Multiple call sites (initial load, rotate) can each want a thumbnail
+// rebuild - chain them onto one promise so they never run two rebuilds of
+// the same thumbnail list at once, regardless of which triggered it first.
+let thumbnailBuildChain = Promise.resolve();
+
+function scheduleThumbnailBuild() {
+    thumbnailBuildChain = thumbnailBuildChain.then(() => buildThumbnails()).catch((err) => console.error(err));
+    return thumbnailBuildChain;
 }
 
 async function buildThumbnails() {
@@ -258,18 +302,22 @@ pageInput.addEventListener("change", () => {
 
 document.getElementById("btn-zoom-in").addEventListener("click", () => {
     scale = Math.min(MAX_ZOOM, scale + ZOOM_STEP);
-    rerenderAllPages();
+    requestRerender(false);
 });
 
 document.getElementById("btn-zoom-out").addEventListener("click", () => {
     scale = Math.max(MIN_ZOOM, scale - ZOOM_STEP);
-    rerenderAllPages();
+    requestRerender(false);
 });
 
-document.getElementById("btn-rotate").addEventListener("click", () => {
+document.getElementById("btn-rotate-left").addEventListener("click", () => {
+    rotation = (rotation + 270) % 360; // -90, kept positive for pdf.js's rotation param
+    requestRerender(true);
+});
+
+document.getElementById("btn-rotate-right").addEventListener("click", () => {
     rotation = (rotation + 90) % 360;
-    rerenderAllPages();
-    buildThumbnails().catch((err) => console.error(err));
+    requestRerender(true);
 });
 
 document.addEventListener("keydown", (event) => {
