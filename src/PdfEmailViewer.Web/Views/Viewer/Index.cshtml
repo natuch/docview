@@ -11,12 +11,17 @@
 <div id="viewer-root" class="pdf-viewer" data-document-id="@documentId" data-stream-url="/Viewer/@documentId/stream">
     <div class="toolbar">
         <div class="toolbar-group">
+            <button id="btn-toggle-sidebar" type="button" title="แสดง/ซ่อนตัวอย่างหน้า" aria-pressed="true">&#9776;</button>
+        </div>
+        <div class="toolbar-group">
+            <button id="btn-first" type="button" title="หน้าแรก">&#8676;</button>
             <button id="btn-prev" type="button" title="หน้าก่อนหน้า">&#8592;</button>
             <span class="page-indicator">
                 <input id="page-input" type="number" min="1" value="1" />
                 <span>/ <span id="page-count">-</span></span>
             </span>
             <button id="btn-next" type="button" title="หน้าถัดไป">&#8594;</button>
+            <button id="btn-last" type="button" title="หน้าสุดท้าย">&#8677;</button>
         </div>
         <div class="toolbar-group toolbar-title" title="@displayName">@displayName</div>
         <div class="toolbar-group">
@@ -26,8 +31,13 @@
             <button id="btn-rotate" type="button" title="หมุน">&#8635;</button>
         </div>
     </div>
-    <div id="canvas-container" class="canvas-container" oncontextmenu="return false;">
-        <canvas id="pdf-canvas"></canvas>
+    <div class="viewer-body">
+        <div id="thumbnail-panel" class="thumbnail-panel">
+            <div id="thumbnail-list" class="thumbnail-list"></div>
+        </div>
+        <div id="canvas-container" class="canvas-container" oncontextmenu="return false;">
+            <div id="pages-container" class="pages-container"></div>
+        </div>
     </div>
 </div>
 

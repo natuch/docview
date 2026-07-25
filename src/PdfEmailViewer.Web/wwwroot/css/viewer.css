@@ -1,9 +1,16 @@
+/* This stylesheet is only loaded on the Viewer page, so scoping this to
+   body is safe - it stops the toolbar from scrolling out of view when a
+   mouse-wheel scroll bubbles past the page stack's own scroll boundary. */
+body {
+    overflow: hidden;
+}
+
 .pdf-viewer {
     user-select: none;
     -webkit-user-select: none;
     display: flex;
     flex-direction: column;
-    height: calc(100vh - 140px);
+    height: calc(100vh - 48px);
 }
 
 .toolbar {
@@ -58,6 +65,70 @@
     border-radius: 4px;
 }
 
+.viewer-body {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    border: 1px solid #e5e7eb;
+    border-top: none;
+    border-radius: 0 0 8px 8px;
+    overflow: hidden;
+}
+
+.thumbnail-panel {
+    width: 150px;
+    flex: 0 0 auto;
+    overflow-y: auto;
+    background: #3f4245;
+    border-right: 1px solid #e5e7eb;
+    transition: width 0.15s ease, padding 0.15s ease;
+}
+
+.thumbnail-panel.collapsed {
+    width: 0;
+    border-right: none;
+}
+
+.thumbnail-list {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 8px;
+}
+
+.thumbnail-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 4px;
+    border: 2px solid transparent;
+    border-radius: 4px;
+    background: none;
+    cursor: pointer;
+}
+
+.thumbnail-item canvas {
+    display: block;
+    background: #fff;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+    pointer-events: none;
+}
+
+.thumbnail-item .thumbnail-label {
+    color: #d1d5db;
+    font-size: 11px;
+}
+
+.thumbnail-item:hover {
+    border-color: rgba(37, 99, 235, 0.4);
+}
+
+.thumbnail-item.active {
+    border-color: #2563eb;
+}
+
 .canvas-container {
     flex: 1;
     overflow: auto;
@@ -65,13 +136,39 @@
     display: flex;
     justify-content: center;
     padding: 24px;
-    border: 1px solid #e5e7eb;
-    border-top: none;
-    border-radius: 0 0 8px 8px;
 }
 
-.canvas-container canvas {
+.pages-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+}
+
+.pdf-page {
+    position: relative;
+}
+
+.pdf-page canvas {
+    display: block;
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
     background: #fff;
     pointer-events: none;
+}
+
+.link-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+}
+
+.link-layer a {
+    position: absolute;
+    display: block;
+    cursor: pointer;
+}
+
+.link-layer a:hover {
+    outline: 2px solid rgba(37, 99, 235, 0.6);
+    outline-offset: 1px;
 }

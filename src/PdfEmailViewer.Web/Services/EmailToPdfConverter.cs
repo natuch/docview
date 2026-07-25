@@ -126,6 +126,11 @@ public sealed class EmailToPdfConverter : IEmailToPdfConverter
             Args = ["--no-sandbox", "--disable-gpu"],
         });
         await using var page = await browser.NewPageAsync();
+        // Print output re-rasterizes embedded bitmaps (photos, signatures) at the
+        // page's device pixel ratio - render at 2x so those images keep their
+        // original sharpness instead of being flattened at 1x screen resolution.
+        // Vector text is unaffected either way.
+        await page.SetViewportAsync(new ViewPortOptions { Width = 800, Height = 1000, DeviceScaleFactor = 2 });
         await page.SetContentAsync(html, new SetContentOptions { WaitUntil = [WaitUntilNavigation.Load] });
 
         return await page.PdfDataAsync(new PdfOptions
