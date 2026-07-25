@@ -55,8 +55,25 @@ body {
     line-height: 1;
 }
 
+.toolbar button.icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #4b5563;
+    transition: color 0.1s ease, background 0.1s ease;
+}
+
+.toolbar button.icon-btn svg {
+    width: 18px;
+    height: 18px;
+}
+
 .toolbar button:hover {
     background: #e5e7eb;
+}
+
+.toolbar button.icon-btn:hover {
+    color: #1f2937;
 }
 
 #page-input {
@@ -158,19 +175,140 @@ body {
     pointer-events: none;
 }
 
+/* Standard pdf.js text-layer stylesheet (positions invisible, selectable
+   spans exactly over the glyphs pdf.js already drew on the canvas). The
+   page-wide user-select:none above blocks selection everywhere by design
+   (toolbar, thumbnails) - explicitly re-enable it only inside this layer. */
+.textLayer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    text-align: initial;
+    inset: 0;
+    overflow: hidden;
+    line-height: 1;
+    -webkit-user-select: text;
+    user-select: text;
+    forced-color-adjust: none;
+    transform-origin: 0 0;
+    z-index: 1;
+}
+
+.textLayer span,
+.textLayer br {
+    color: transparent;
+    position: absolute;
+    white-space: pre;
+    cursor: text;
+    transform-origin: 0% 0%;
+}
+
+/* Auto-detected plain-text URLs (see linkifyTextLayer) - stay invisible
+   like the rest of the text layer, but clickable. */
+.textLayer a {
+    color: transparent;
+    text-decoration: none;
+    cursor: pointer;
+    pointer-events: auto;
+}
+
+.textLayer ::selection {
+    background: rgba(37, 99, 235, 0.3);
+}
+
+.textLayer .endOfContent {
+    display: block;
+    position: absolute;
+    inset: 100% 0 0;
+    z-index: -1;
+    cursor: default;
+    user-select: none;
+}
+
+.textLayer .endOfContent.active {
+    top: 0;
+}
+
 .link-layer {
     position: absolute;
     top: 0;
     left: 0;
+    z-index: 2;
+    /* Only the <a> rects below should catch clicks - everywhere else, mouse
+       events must fall through to the text layer underneath for selection. */
+    pointer-events: none;
 }
 
 .link-layer a {
     position: absolute;
     display: block;
     cursor: pointer;
+    pointer-events: auto;
 }
 
 .link-layer a:hover {
     outline: 2px solid rgba(37, 99, 235, 0.6);
     outline-offset: 1px;
+}
+
+.password-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15, 23, 42, 0.55);
+    font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+}
+
+.password-overlay.hidden {
+    display: none;
+}
+
+.password-dialog {
+    width: 320px;
+    background: #fff;
+    border-radius: 10px;
+    padding: 24px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+.password-dialog p {
+    margin: 0 0 16px;
+    font-size: 14px;
+    color: #374151;
+}
+
+#password-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 14px;
+}
+
+.password-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 18px;
+}
+
+.password-actions button {
+    padding: 8px 14px;
+    border-radius: 6px;
+    border: 1px solid #d1d5db;
+    background: #fff;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+#password-submit {
+    background: #2563eb;
+    border-color: #2563eb;
+    color: #fff;
 }

@@ -16,6 +16,12 @@ const thumbnailPanel = document.getElementById("thumbnail-panel");
 const thumbnailList = document.getElementById("thumbnail-list");
 const toggleSidebarBtn = document.getElementById("btn-toggle-sidebar");
 
+const passwordOverlay = document.getElementById("password-overlay");
+const passwordMessage = document.getElementById("password-message");
+const passwordInput = document.getElementById("password-input");
+const passwordSubmit = document.getElementById("password-submit");
+const passwordCancel = document.getElementById("password-cancel");
+
 const ZOOM_STEP = 0.15;
 const MIN_ZOOM = 0.4;
 const MAX_ZOOM = 3;
@@ -43,6 +49,42 @@ let thumbnailButtons = [];
 // scrolling past as "current" - suppress it until the scroll settles.
 let suppressScrollTracking = false;
 
+// Resolves with the entered password, or rejects if the user cancels -
+// used as pdf.js's onPassword callback below.
+function promptForPassword(reason) {
+    return new Promise((resolve, reject) => {
+        passwordMessage.textContent = reason === pdfjsLib.PasswordResponses.INCORRECT_PASSWORD
+            ? "รหัสผ่านไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง"
+            : "เอกสารนี้มีการป้องกันด้วยรหัสผ่าน กรุณากรอกรหัสผ่านเพื่อเปิดดู";
+        passwordInput.value = "";
+        passwordOverlay.classList.remove("hidden");
+        passwordInput.focus();
+
+        const cleanup = () => {
+            passwordOverlay.classList.add("hidden");
+            passwordSubmit.removeEventListener("click", onSubmit);
+            passwordCancel.removeEventListener("click", onCancel);
+            passwordInput.removeEventListener("keydown", onKeydown);
+        };
+        const onSubmit = () => {
+            cleanup();
+            resolve(passwordInput.value);
+        };
+        const onCancel = () => {
+            cleanup();
+            reject(new Error("password-cancelled"));
+        };
+        const onKeydown = (event) => {
+            if (event.key === "Enter") onSubmit();
+            if (event.key === "Escape") onCancel();
+        };
+
+        passwordSubmit.addEventListener("click", onSubmit);
+        passwordCancel.addEventListener("click", onCancel);
+        passwordInput.addEventListener("keydown", onKeydown);
+    });
+}
+
 async function loadDocument() {
     // fetch (not a direct <a href> / <embed>) keeps the PDF bytes out of
     // browser history and the "open in new tab" / save-target surface.
@@ -51,7 +93,21 @@ async function loadDocument() {
         throw new Error(`Failed to load document: ${response.status}`);
     }
     const data = await response.arrayBuffer();
-    pdfDocument = await pdfjsLib.getDocument({ data }).promise;
+
+    // onPassword only works set as a property on the loadingTask - passing
+    // it inside the getDocument() params object is silently ignored, and
+    // the document rejects immediately with PasswordException instead of
+    // ever prompting.
+    const loadingTask = pdfjsLib.getDocument({ data });
+    loadingTask.onPassword = (updatePassword, reason) => {
+        promptForPassword(reason).then(
+            (password) => updatePassword(password),
+            // pdf.js's documented way to cancel a pending password request:
+            // pass an Error instead of a password string.
+            () => updatePassword(new Error("password-cancelled")),
+        );
+    };
+    pdfDocument = await loadingTask.promise;
     pageCountEl.textContent = String(pdfDocument.numPages);
     pageInput.max = String(pdfDocument.numPages);
 
@@ -72,22 +128,32 @@ async function buildPages() {
         wrapper.dataset.page = String(pageNumber);
 
         const canvas = document.createElement("canvas");
+        const textLayer = document.createElement("div");
+        textLayer.className = "textLayer";
         const linkLayer = document.createElement("div");
         linkLayer.className = "link-layer";
 
+        // Order matters: text layer sits above the canvas so its (invisible)
+        // selectable spans catch the mouse, and the link layer sits above
+        // that so a link always wins a click over text selection where the
+        // two overlap (matches how normal PDF viewers behave).
         wrapper.appendChild(canvas);
+        wrapper.appendChild(textLayer);
         wrapper.appendChild(linkLayer);
         pagesContainer.appendChild(wrapper);
 
-        pageEntries.push({ pageNumber, page, wrapper, canvas, linkLayer });
+        pageEntries.push({ pageNumber, page, wrapper, canvas, textLayer, linkLayer });
         pageVisibilityObserver.observe(wrapper);
     }
 }
 
 async function renderAllPages() {
-    for (const entry of pageEntries) {
-        await renderPageEntry(entry);
-    }
+    // Each page owns its own canvas, so rendering them concurrently is safe
+    // (pdf.js only forbids two concurrent render() calls on the *same*
+    // canvas) - and it matters here: a single slow page (large embedded
+    // image, complex font) would otherwise block every page after it,
+    // including ones with links, from becoming usable.
+    await Promise.all(pageEntries.map((entry) => renderPageEntry(entry)));
     zoomLevelEl.textContent = `${Math.round(scale * 100)}%`;
 }
 
@@ -100,6 +166,9 @@ async function renderPageEntry(entry) {
     entry.canvas.style.height = `${Math.floor(viewport.height)}px`;
     entry.wrapper.style.width = `${viewport.width}px`;
     entry.wrapper.style.height = `${viewport.height}px`;
+    // pdf.js's TextLayer sizes/scales its spans off this custom property
+    // rather than the viewport object directly.
+    entry.wrapper.style.setProperty("--scale-factor", String(viewport.scale));
 
     const transform = OUTPUT_SCALE !== 1 ? [OUTPUT_SCALE, 0, 0, OUTPUT_SCALE, 0, 0] : null;
 
@@ -109,7 +178,133 @@ async function renderPageEntry(entry) {
         console.error(err);
     }
 
+    await renderTextLayer(entry, viewport);
     await renderLinks(entry, viewport);
+}
+
+async function renderTextLayer(entry, viewport) {
+    entry.textLayer.innerHTML = "";
+
+    try {
+        const textLayer = new pdfjsLib.TextLayer({
+            textContentSource: entry.page.streamTextContent(),
+            container: entry.textLayer,
+            viewport,
+        });
+        await textLayer.render();
+    } catch (err) {
+        console.error(err);
+    }
+
+    linkifyTextLayer(entry);
+}
+
+// Not every URL in a PDF is a real /Link annotation - documents routinely
+// just print "www.example.com" as plain text. Real PDF viewers auto-detect
+// those and make them clickable too, so scan the rendered (invisible,
+// selectable) text spans for URL-shaped substrings and wrap them in <a>
+// tags in place.
+//
+// pdf.js splits text into one span per "item" (a font/position run), not per
+// word, and a URL can straddle two items with no space between them in the
+// extracted string either way - whether they're a genuinely continuous run
+// (a broken URL) or two unrelated pieces of text pdf.js just didn't insert a
+// space between (e.g. a URL immediately followed by the next section's
+// heading number). Text content alone can't tell those apart; only their
+// rendered position can - so spans are only joined into one matching window
+// when they sit right next to each other on the same line with no gap.
+const URL_PATTERN = /((?:https?:\/\/|www\.)[^\s<>"'฀-๿]+)/gi;
+const ADJACENT_LINE_TOLERANCE_PX = 3;
+const ADJACENT_GAP_TOLERANCE_PX = 3;
+
+function linkifyTextLayer(entry) {
+    const spans = [...entry.textLayer.querySelectorAll(":scope > span")];
+    if (spans.length === 0) return;
+
+    const rects = spans.map((span) => span.getBoundingClientRect());
+
+    // Partition spans into runs of mutually-adjacent spans (same line, ~0 gap).
+    const runs = [];
+    let currentRun = [0];
+    for (let i = 1; i < spans.length; i++) {
+        const prev = rects[i - 1];
+        const cur = rects[i];
+        const sameLine = Math.abs(cur.top - prev.top) <= ADJACENT_LINE_TOLERANCE_PX;
+        const noGap = cur.left - prev.right <= ADJACENT_GAP_TOLERANCE_PX && cur.left - prev.right >= -ADJACENT_GAP_TOLERANCE_PX;
+        if (sameLine && noGap) {
+            currentRun.push(i);
+        } else {
+            runs.push(currentRun);
+            currentRun = [i];
+        }
+    }
+    runs.push(currentRun);
+
+    for (const run of runs) {
+        linkifyRun(run.map((i) => spans[i]));
+    }
+}
+
+function linkifyRun(runSpans) {
+    const texts = runSpans.map((span) => span.textContent || "");
+    const fullText = texts.join("");
+    if (!/(?:https?:\/\/|www\.)/i.test(fullText)) return;
+
+    const matches = [...fullText.matchAll(URL_PATTERN)];
+    if (matches.length === 0) return;
+
+    const spanOffsets = [];
+    let cursor = 0;
+    for (const text of texts) {
+        spanOffsets.push(cursor);
+        cursor += text.length;
+    }
+
+    const fragmentsBySpanIndex = new Map();
+    for (const match of matches) {
+        const url = match[0].replace(/[),.;]+$/, "");
+        const matchStart = match.index;
+        const matchEnd = matchStart + url.length;
+        const href = /^https?:\/\//i.test(url) ? url : `http://${url}`;
+
+        for (let i = 0; i < runSpans.length; i++) {
+            const spanStart = spanOffsets[i];
+            const spanEnd = spanStart + texts[i].length;
+            const overlapStart = Math.max(matchStart, spanStart);
+            const overlapEnd = Math.min(matchEnd, spanEnd);
+            if (overlapStart >= overlapEnd) continue;
+
+            if (!fragmentsBySpanIndex.has(i)) fragmentsBySpanIndex.set(i, []);
+            fragmentsBySpanIndex.get(i).push({ start: overlapStart - spanStart, end: overlapEnd - spanStart, href });
+        }
+    }
+
+    for (const [i, fragments] of fragmentsBySpanIndex) {
+        const span = runSpans[i];
+        const text = texts[i];
+        fragments.sort((a, b) => a.start - b.start);
+
+        span.textContent = "";
+        let localCursor = 0;
+        for (const fragment of fragments) {
+            if (fragment.start > localCursor) {
+                span.appendChild(document.createTextNode(text.slice(localCursor, fragment.start)));
+            }
+
+            const link = document.createElement("a");
+            link.href = fragment.href;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            link.title = fragment.href;
+            link.textContent = text.slice(fragment.start, fragment.end);
+            span.appendChild(link);
+
+            localCursor = fragment.end;
+        }
+        if (localCursor < text.length) {
+            span.appendChild(document.createTextNode(text.slice(localCursor)));
+        }
+    }
 }
 
 async function renderLinks(entry, viewport) {
@@ -135,13 +330,36 @@ async function renderLinks(entry, viewport) {
     }
 }
 
+// Element.scrollIntoView() is free to adjust *any* scrollable ancestor, not
+// just the one we mean to move - including body, which still has an internal
+// scroll position even with overflow:hidden, just no scrollbar/wheel to move
+// it back. Scroll only the specific container we intend to move instead.
+function scrollElementIntoContainer(container, target, { behavior = "auto", align = "start" } = {}) {
+    const containerRect = container.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+
+    let delta;
+    if (align === "nearest") {
+        if (targetRect.top >= containerRect.top && targetRect.bottom <= containerRect.bottom) {
+            return;
+        }
+        delta = targetRect.top < containerRect.top
+            ? targetRect.top - containerRect.top
+            : targetRect.bottom - containerRect.bottom;
+    } else {
+        delta = targetRect.top - containerRect.top;
+    }
+
+    container.scrollTo({ top: container.scrollTop + delta, behavior });
+}
+
 async function rerenderAllPages() {
     await renderAllPages();
 
     const entry = pageEntries[currentPage - 1];
     if (entry) {
         suppressScrollTracking = true;
-        entry.wrapper.scrollIntoView({ behavior: "auto", block: "start" });
+        scrollElementIntoContainer(canvasContainer, entry.wrapper, { behavior: "auto", align: "start" });
         window.setTimeout(() => { suppressScrollTracking = false; }, 300);
     }
 }
@@ -194,7 +412,10 @@ async function buildThumbnails() {
     thumbnailList.innerHTML = "";
     thumbnailButtons = [];
 
-    for (const entry of pageEntries) {
+    // Build and append every button/canvas first so DOM order stays 1..N,
+    // then render them concurrently (own canvas each, same reasoning as
+    // renderAllPages - one slow page shouldn't stall every other thumbnail).
+    const jobs = pageEntries.map((entry) => {
         const baseViewport = entry.page.getViewport({ scale: 1, rotation });
         const viewport = entry.page.getViewport({ scale: THUMBNAIL_WIDTH / baseViewport.width, rotation });
 
@@ -218,12 +439,16 @@ async function buildThumbnails() {
         thumbnailList.appendChild(button);
         thumbnailButtons.push(button);
 
+        return { entry, thumbCanvas, viewport };
+    });
+
+    await Promise.all(jobs.map(async ({ entry, thumbCanvas, viewport }) => {
         try {
             await entry.page.render({ canvasContext: thumbCanvas.getContext("2d"), viewport }).promise;
         } catch (err) {
             console.error(err);
         }
-    }
+    }));
 
     updateActiveThumbnail();
 }
@@ -233,7 +458,7 @@ function updateActiveThumbnail() {
         const isActive = Number(button.dataset.page) === currentPage;
         button.classList.toggle("active", isActive);
         if (isActive) {
-            button.scrollIntoView({ block: "nearest" });
+            scrollElementIntoContainer(thumbnailPanel, button, { behavior: "auto", align: "nearest" });
         }
     }
 }
@@ -252,7 +477,7 @@ function goToPage(pageNumber) {
 
     suppressScrollTracking = true;
     setCurrentPage(pageNumber);
-    entry.wrapper.scrollIntoView({ behavior: "smooth", block: "start" });
+    scrollElementIntoContainer(canvasContainer, entry.wrapper, { behavior: "smooth", align: "start" });
     window.setTimeout(() => { suppressScrollTracking = false; }, 500);
 }
 
@@ -328,5 +553,8 @@ document.addEventListener("keydown", (event) => {
 
 loadDocument().catch((err) => {
     console.error(err);
-    root.innerHTML = "<p style=\"padding:24px\">ไม่สามารถโหลดเอกสารได้ หรือลิงก์หมดอายุ</p>";
+    const message = err?.name === "PasswordException" || err?.message === "password-cancelled"
+        ? "ยกเลิกการเปิดเอกสาร เนื่องจากไม่ได้กรอกรหัสผ่าน"
+        : "ไม่สามารถโหลดเอกสารได้ หรือลิงก์หมดอายุ";
+    root.innerHTML = `<p style="padding:24px">${message}</p>`;
 });
