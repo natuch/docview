@@ -1,5 +1,11 @@
+using System.Text;
 using Microsoft.AspNetCore.StaticFiles;
 using PdfEmailViewer.Web.Services;
+
+// .NET Core only ships Unicode/ASCII encodings by default - legacy codepages
+// (Windows-874/Thai, Windows-1252, Shift-JIS, ...) used in .eml/.msg headers
+// need this provider registered, or Encoding.GetEncoding(874) throws.
+Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
 var builder = WebApplication.CreateBuilder(args);
 

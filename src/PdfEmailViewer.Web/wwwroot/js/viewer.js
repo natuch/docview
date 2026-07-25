@@ -214,6 +214,7 @@ async function renderTextLayer(entry, viewport) {
 // rendered position can - so spans are only joined into one matching window
 // when they sit right next to each other on the same line with no gap.
 const URL_PATTERN = /((?:https?:\/\/|www\.)[^\s<>"'฀-๿]+)/gi;
+const URL_CONTINUATION_PATTERN = /^[^\s<>"'฀-๿]+/;
 const ADJACENT_LINE_TOLERANCE_PX = 3;
 const ADJACENT_GAP_TOLERANCE_PX = 3;
 
@@ -224,69 +225,143 @@ function linkifyTextLayer(entry) {
     const rects = spans.map((span) => span.getBoundingClientRect());
 
     // Partition spans into runs of mutually-adjacent spans (same line, ~0 gap).
-    const runs = [];
-    let currentRun = [0];
+    const runGroups = [];
+    let currentGroup = [0];
     for (let i = 1; i < spans.length; i++) {
         const prev = rects[i - 1];
         const cur = rects[i];
         const sameLine = Math.abs(cur.top - prev.top) <= ADJACENT_LINE_TOLERANCE_PX;
         const noGap = cur.left - prev.right <= ADJACENT_GAP_TOLERANCE_PX && cur.left - prev.right >= -ADJACENT_GAP_TOLERANCE_PX;
         if (sameLine && noGap) {
-            currentRun.push(i);
+            currentGroup.push(i);
         } else {
-            runs.push(currentRun);
-            currentRun = [i];
+            runGroups.push(currentGroup);
+            currentGroup = [i];
         }
     }
-    runs.push(currentRun);
+    runGroups.push(currentGroup);
 
-    for (const run of runs) {
-        linkifyRun(run.map((i) => spans[i]));
+    const runs = runGroups.map((group) => {
+        const runSpans = group.map((i) => spans[i]);
+        const texts = runSpans.map((span) => span.textContent || "");
+        return {
+            spans: runSpans,
+            texts,
+            fullText: texts.join(""),
+            firstRect: rects[group[0]],
+            lastRect: rects[group[group.length - 1]],
+        };
+    });
+
+    // Raw (untrimmed) per-run matches - kept untrimmed so "did this match
+    // reach exactly the end of the run's text" is a reliable truncation
+    // signal, not thrown off by punctuation-stripping.
+    const runMatches = runs.map((run) => [...run.fullText.matchAll(URL_PATTERN)].map((m) => ({
+        start: m.index,
+        end: m.index + m[0].length,
+        url: m[0],
+    })));
+
+    // A long unbroken URL (no spaces) can force-wrap across *lines*, not
+    // just adjacent same-line items (e.g. an email's link text). A run's
+    // trailing match reaching exactly that run's own text length means it
+    // was cut off by the run boundary, not by a natural separator - ordinary
+    // prose essentially never matches URL_PATTERN all the way to a line's
+    // end, so this is a safe, specific signal to bridge into the next line.
+    for (let i = 0; i < runs.length; i++) {
+        const matches = runMatches[i];
+        if (matches.length === 0) continue;
+        const last = matches[matches.length - 1];
+        if (last.end !== runs[i].fullText.length) continue;
+
+        let combinedUrl = last.url;
+        const bridgedInto = [];
+        let j = i;
+        while (j + 1 < runs.length) {
+            const prevRect = runs[j].lastRect;
+            const nextRun = runs[j + 1];
+            const verticalGap = nextRun.firstRect.top - prevRect.bottom;
+            const rowHeight = Math.max(4, prevRect.bottom - prevRect.top);
+            const looksLikeNextLine = verticalGap >= -2 && verticalGap <= rowHeight * 1.5;
+            if (!looksLikeNextLine) break;
+
+            const continuation = URL_CONTINUATION_PATTERN.exec(nextRun.fullText);
+            // Require the continuation to consume the *entire* next run, not
+            // just a leading prefix of it. A partial match (e.g. "3.1.2" out
+            // of a run whose full text is "3.1.2 ตัวอย่างหัวข้อ") means that
+            // run is its own independent line (a heading, a new sentence)
+            // that merely happens to start with non-whitespace characters -
+            // not a genuine continuation of the wrapped URL. Bridging into
+            // it anyway is exactly the over-matching bug this whole
+            // adjacency-based approach exists to avoid.
+            if (!continuation || continuation[0].length !== nextRun.fullText.length) break;
+
+            combinedUrl += continuation[0];
+            bridgedInto.push({ runIndex: j + 1, length: continuation[0].length });
+            j++;
+        }
+
+        if (bridgedInto.length > 0) {
+            last.url = combinedUrl;
+            last.bridgedInto = bridgedInto;
+        }
+    }
+
+    const fragmentsByRunIndex = new Map();
+    const addFragment = (runIndex, start, end, href) => {
+        if (!fragmentsByRunIndex.has(runIndex)) fragmentsByRunIndex.set(runIndex, []);
+        fragmentsByRunIndex.get(runIndex).push({ start, end, href });
+    };
+
+    for (let i = 0; i < runs.length; i++) {
+        for (const match of runMatches[i]) {
+            const url = match.url.replace(/[),.;]+$/, "");
+            const href = /^https?:\/\//i.test(url) ? url : `http://${url}`;
+            addFragment(i, match.start, Math.min(match.end, url.length + match.start), href);
+
+            if (match.bridgedInto) {
+                for (const { runIndex, length } of match.bridgedInto) {
+                    addFragment(runIndex, 0, length, href);
+                }
+            }
+        }
+    }
+
+    for (const [runIndex, fragments] of fragmentsByRunIndex) {
+        renderRunFragments(runs[runIndex], fragments);
     }
 }
 
-function linkifyRun(runSpans) {
-    const texts = runSpans.map((span) => span.textContent || "");
-    const fullText = texts.join("");
-    if (!/(?:https?:\/\/|www\.)/i.test(fullText)) return;
-
-    const matches = [...fullText.matchAll(URL_PATTERN)];
-    if (matches.length === 0) return;
-
+function renderRunFragments(run, fragments) {
     const spanOffsets = [];
     let cursor = 0;
-    for (const text of texts) {
+    for (const text of run.texts) {
         spanOffsets.push(cursor);
         cursor += text.length;
     }
 
     const fragmentsBySpanIndex = new Map();
-    for (const match of matches) {
-        const url = match[0].replace(/[),.;]+$/, "");
-        const matchStart = match.index;
-        const matchEnd = matchStart + url.length;
-        const href = /^https?:\/\//i.test(url) ? url : `http://${url}`;
-
-        for (let i = 0; i < runSpans.length; i++) {
+    for (const fragment of fragments) {
+        for (let i = 0; i < run.spans.length; i++) {
             const spanStart = spanOffsets[i];
-            const spanEnd = spanStart + texts[i].length;
-            const overlapStart = Math.max(matchStart, spanStart);
-            const overlapEnd = Math.min(matchEnd, spanEnd);
+            const spanEnd = spanStart + run.texts[i].length;
+            const overlapStart = Math.max(fragment.start, spanStart);
+            const overlapEnd = Math.min(fragment.end, spanEnd);
             if (overlapStart >= overlapEnd) continue;
 
             if (!fragmentsBySpanIndex.has(i)) fragmentsBySpanIndex.set(i, []);
-            fragmentsBySpanIndex.get(i).push({ start: overlapStart - spanStart, end: overlapEnd - spanStart, href });
+            fragmentsBySpanIndex.get(i).push({ start: overlapStart - spanStart, end: overlapEnd - spanStart, href: fragment.href });
         }
     }
 
-    for (const [i, fragments] of fragmentsBySpanIndex) {
-        const span = runSpans[i];
-        const text = texts[i];
-        fragments.sort((a, b) => a.start - b.start);
+    for (const [i, spanFragments] of fragmentsBySpanIndex) {
+        const span = run.spans[i];
+        const text = run.texts[i];
+        spanFragments.sort((a, b) => a.start - b.start);
 
         span.textContent = "";
         let localCursor = 0;
-        for (const fragment of fragments) {
+        for (const fragment of spanFragments) {
             if (fragment.start > localCursor) {
                 span.appendChild(document.createTextNode(text.slice(localCursor, fragment.start)));
             }
