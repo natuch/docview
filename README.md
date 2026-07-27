@@ -12,7 +12,9 @@ A web-based document viewer built with ASP.NET Core MVC and PDF.js. Upload a PDF
 - **Concurrency-safe conversions** — the headless Chromium browser is a single shared instance reused across requests (one isolated Page per conversion, not one browser process per conversion), and every LibreOffice conversion gets its own temp working directory and user-profile directory, so many people converting the same or different files at once don't collide or block each other.
 - **No download / no copy (UX-level)** — the PDF stream is served with `Cache-Control: no-store` and an `inline` disposition with no filename, and the viewer blocks right-click, drag, and common save/print shortcuts. Text can be highlighted/selected in the text layer, but copy is still blocked. This is a UX deterrent, not DRM — the PDF bytes are still reachable via dev tools/network tab by design.
 - **Password-protected PDFs** — prompts for a password in-page (wrong-password retry, cancel) instead of failing.
-- **Open a local file directly** — `http://localhost:5202/?file=<absolute-path>` skips the upload form entirely. Unrestricted in Development (localhost convenience). Outside Development, a shared secret is required (`&key=<value>` matching the `LocalFileAccess:SharedKey` config) — a bare query string naming an arbitrary server-side file path is a classic local-file-read vulnerability, so this restricts it to callers who know the secret rather than anyone who can guess or enumerate the URL. See [Deploying to IIS](#deploying-to-iis-windows) for how to set the key.
+- **Search** — find text in the document via the toolbar button or Ctrl/Cmd+F, with a match counter and next/previous navigation; matches are found directly against the rendered text layer, so results can't drift from what's on screen.
+- **Loading indicator** — a "Loading... Please wait." overlay covers the page area until the first full render completes.
+- **Open a local file directly** — `http://localhost:5202/?file=<absolute-path>` skips the upload form entirely, in every environment. A bare query string naming an arbitrary server-side file path is a classic local-file-read vulnerability with no allowlist or key gating it — only appropriate for an intranet-only deployment that has explicitly accepted that tradeoff.
 
 ## Requirements
 
@@ -28,15 +30,6 @@ A web-based document viewer built with ASP.NET Core MVC and PDF.js. Upload a PDF
 4. Make sure the app pool identity can spawn child processes (`soffice.exe`) and write to its temp directory; enabling "Load User Profile" on the app pool avoids some Puppeteer/Chromium first-run issues.
 5. First request that needs email/image/txt conversion downloads headless Chromium via PuppeteerSharp — make sure the server has (temporary, first-run) outbound network access, or pre-warm the Chromium cache as part of the deployment.
 6. Grant the app pool identity (or `IIS_IUSRS`) write access to a `keys` folder next to the app (`<publish-folder>\keys`) — `Program.cs` pins ASP.NET Core's Data Protection key ring there explicitly, since the default IIS `ApplicationPoolIdentity` has no loaded user profile and can't write to its normal fallback location, which otherwise breaks anything using Data Protection (including the antiforgery token on the upload form) with an `UnauthorizedAccessException`.
-7. If the `?file=` shortcut needs to work outside Development, set the `LocalFileAccess__SharedKey` environment variable to a real secret — e.g. add it to the deployed (not the source-controlled) `web.config`:
-   ```xml
-   <aspNetCore processPath="..." arguments="...">
-     <environmentVariables>
-       <environmentVariable name="LocalFileAccess__SharedKey" value="<your-secret>" />
-     </environmentVariables>
-   </aspNetCore>
-   ```
-   Whichever internal system generates `?file=` links must send the same value as `&key=`. Leaving this unset denies the endpoint outside Development rather than silently allowing unrestricted file reads.
 
 ## Getting started
 
