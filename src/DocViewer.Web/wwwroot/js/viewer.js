@@ -31,6 +31,16 @@ const passwordInput = document.getElementById("password-input");
 const passwordSubmit = document.getElementById("password-submit");
 const passwordCancel = document.getElementById("password-cancel");
 
+const loadingOverlay = document.getElementById("loading-overlay");
+
+const searchToggleBtn = document.getElementById("btn-search");
+const searchBar = document.getElementById("search-bar");
+const searchInput = document.getElementById("search-input");
+const searchCountEl = document.getElementById("search-count");
+const searchPrevBtn = document.getElementById("search-prev");
+const searchNextBtn = document.getElementById("search-next");
+const searchCloseBtn = document.getElementById("search-close");
+
 const ZOOM_STEP = 0.15;
 const MIN_ZOOM = 0.4;
 const MAX_ZOOM = 3;
@@ -66,11 +76,17 @@ function promptForPassword(reason) {
             ? "รหัสผ่านไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง"
             : "เอกสารนี้มีการป้องกันด้วยรหัสผ่าน กรุณากรอกรหัสผ่านเพื่อเปิดดู";
         passwordInput.value = "";
+        // The loading overlay would otherwise sit on top of (or behind, but
+        // still visually competing with) the password dialog while pdf.js is
+        // paused waiting on it - hide it until the password is resolved, then
+        // loadDocument's own flow puts it back until pages actually render.
+        loadingOverlay.classList.add("hidden");
         passwordOverlay.classList.remove("hidden");
         passwordInput.focus();
 
         const cleanup = () => {
             passwordOverlay.classList.add("hidden");
+            loadingOverlay.classList.remove("hidden");
             passwordSubmit.removeEventListener("click", onSubmit);
             passwordCancel.removeEventListener("click", onCancel);
             passwordInput.removeEventListener("keydown", onKeydown);
@@ -122,6 +138,7 @@ async function loadDocument() {
 
     await buildPages();
     await renderAllPages();
+    loadingOverlay.classList.add("hidden");
     await scheduleThumbnailBuild();
 }
 
@@ -137,21 +154,26 @@ async function buildPages() {
         wrapper.dataset.page = String(pageNumber);
 
         const canvas = document.createElement("canvas");
+        const searchLayer = document.createElement("div");
+        searchLayer.className = "search-highlight-layer";
         const textLayer = document.createElement("div");
         textLayer.className = "textLayer";
         const linkLayer = document.createElement("div");
         linkLayer.className = "link-layer";
 
-        // Order matters: text layer sits above the canvas so its (invisible)
-        // selectable spans catch the mouse, and the link layer sits above
-        // that so a link always wins a click over text selection where the
-        // two overlap (matches how normal PDF viewers behave).
+        // Order matters: search highlights sit just above the canvas (a
+        // colored background showing through the transparent text layer),
+        // the text layer sits above that so its (invisible) selectable spans
+        // catch the mouse, and the link layer sits above that so a link
+        // always wins a click over text selection where the two overlap
+        // (matches how normal PDF viewers behave).
         wrapper.appendChild(canvas);
+        wrapper.appendChild(searchLayer);
         wrapper.appendChild(textLayer);
         wrapper.appendChild(linkLayer);
         pagesContainer.appendChild(wrapper);
 
-        pageEntries.push({ pageNumber, page, wrapper, canvas, textLayer, linkLayer });
+        pageEntries.push({ pageNumber, page, wrapper, canvas, searchLayer, textLayer, linkLayer, searchIndex: null });
         pageVisibilityObserver.observe(wrapper);
     }
 }
@@ -193,6 +215,9 @@ async function renderPageEntry(entry) {
 
 async function renderTextLayer(entry, viewport) {
     entry.textLayer.innerHTML = "";
+    entry.searchLayer.innerHTML = "";
+    entry.searchLayer.style.width = `${viewport.width}px`;
+    entry.searchLayer.style.height = `${viewport.height}px`;
 
     try {
         const textLayer = new pdfjsLib.TextLayer({
@@ -206,6 +231,16 @@ async function renderTextLayer(entry, viewport) {
     }
 
     linkifyTextLayer(entry);
+
+    // The text layer just got fully rebuilt (new span elements), so any
+    // previous search index/highlight boxes referencing the old ones are
+    // stale - rebuild both. The match *content* (which page, which character
+    // range) doesn't change across a re-render, only which DOM nodes it maps
+    // to, so search results themselves don't need recomputing here.
+    entry.searchIndex = buildPageSearchIndex(entry);
+    if (searchState.term) {
+        renderSearchHighlightsForPage(entry);
+    }
 }
 
 // Not every URL in a PDF is a real /Link annotation - documents routinely
@@ -413,6 +448,224 @@ async function renderLinks(entry, viewport) {
         entry.linkLayer.appendChild(link);
     }
 }
+
+// --- Search --------------------------------------------------------------
+//
+// There's no separate "search index" fetched from the server - matches are
+// found directly against the same rendered text-layer spans linkifyTextLayer
+// already reads from, so search results and on-screen text can never drift
+// apart. A page's flat text and span offsets get rebuilt every time its text
+// layer re-renders (zoom/rotate rebuilds every span from scratch), but the
+// matches themselves (page + character range) stay valid across that since
+// the underlying PDF text content never changes - only which DOM nodes those
+// offsets map to does, which is exactly what buildPageSearchIndex recomputes.
+
+const searchState = {
+    term: "",
+    matches: [], // { pageNumber, start, end } in document order
+    currentIndex: -1,
+};
+
+function buildPageSearchIndex(entry) {
+    const spans = [...entry.textLayer.querySelectorAll(":scope > span")];
+    let cursor = 0;
+    const spanOffsets = spans.map((span) => {
+        const text = span.textContent || "";
+        const start = cursor;
+        cursor += text.length;
+        return { span, start, end: cursor };
+    });
+    return { flatText: spans.map((span) => span.textContent || "").join(""), spanOffsets };
+}
+
+function escapeRegExp(text) {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Converts a character offset within a <span>'s combined textContent into an
+// actual (Text node, offset) pair Range can use - needed because linkify may
+// have split a span's text across multiple child nodes (plain text + <a>).
+function nodePositionAtOffset(span, offset) {
+    const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    let lastNode = null;
+    let remaining = offset;
+    while (node) {
+        lastNode = node;
+        const length = node.textContent.length;
+        if (remaining <= length) {
+            return { node, offset: remaining };
+        }
+        remaining -= length;
+        node = walker.nextNode();
+    }
+    return lastNode ? { node: lastNode, offset: lastNode.textContent.length } : null;
+}
+
+function createRangeForMatch(entry, start, end) {
+    const overlapping = entry.searchIndex.spanOffsets.filter((so) => start < so.end && end > so.start);
+    if (overlapping.length === 0) return null;
+
+    const first = overlapping[0];
+    const last = overlapping[overlapping.length - 1];
+    const startPos = nodePositionAtOffset(first.span, Math.max(start, first.start) - first.start);
+    const endPos = nodePositionAtOffset(last.span, Math.min(end, last.end) - last.start);
+    if (!startPos || !endPos) return null;
+
+    const range = document.createRange();
+    range.setStart(startPos.node, startPos.offset);
+    range.setEnd(endPos.node, endPos.offset);
+    return range;
+}
+
+function renderSearchHighlightsForPage(entry) {
+    entry.searchLayer.innerHTML = "";
+    if (!searchState.term) return;
+
+    const wrapperRect = entry.wrapper.getBoundingClientRect();
+    const currentMatch = searchState.matches[searchState.currentIndex];
+
+    for (const match of searchState.matches) {
+        if (match.pageNumber !== entry.pageNumber) continue;
+
+        const range = createRangeForMatch(entry, match.start, match.end);
+        if (!range) continue;
+
+        for (const rect of range.getClientRects()) {
+            const box = document.createElement("div");
+            box.className = match === currentMatch ? "search-highlight current" : "search-highlight";
+            box.style.left = `${rect.left - wrapperRect.left}px`;
+            box.style.top = `${rect.top - wrapperRect.top}px`;
+            box.style.width = `${rect.width}px`;
+            box.style.height = `${rect.height}px`;
+            entry.searchLayer.appendChild(box);
+        }
+    }
+}
+
+function renderAllSearchHighlights() {
+    for (const entry of pageEntries) {
+        renderSearchHighlightsForPage(entry);
+    }
+}
+
+function runSearch(term) {
+    searchState.term = term;
+    searchState.matches = [];
+    searchState.currentIndex = -1;
+
+    if (term) {
+        const pattern = new RegExp(escapeRegExp(term), "gi");
+        for (const entry of pageEntries) {
+            if (!entry.searchIndex) continue;
+            for (const m of entry.searchIndex.flatText.matchAll(pattern)) {
+                searchState.matches.push({ pageNumber: entry.pageNumber, start: m.index, end: m.index + m[0].length });
+            }
+        }
+    }
+
+    if (searchState.matches.length > 0) {
+        // Jump to whichever match is closest to (at or after) the page
+        // currently in view, rather than always restarting from page 1.
+        searchState.currentIndex = searchState.matches.findIndex((m) => m.pageNumber >= currentPage);
+        if (searchState.currentIndex === -1) searchState.currentIndex = 0;
+    }
+
+    updateSearchCount();
+    renderAllSearchHighlights();
+    goToCurrentMatch({ behavior: "auto" });
+}
+
+function updateSearchCount() {
+    if (!searchState.term) {
+        searchCountEl.textContent = "";
+    } else if (searchState.matches.length === 0) {
+        searchCountEl.textContent = "ไม่พบผลลัพธ์";
+    } else {
+        searchCountEl.textContent = `${searchState.currentIndex + 1} / ${searchState.matches.length}`;
+    }
+}
+
+function goToCurrentMatch({ behavior = "smooth" } = {}) {
+    const match = searchState.matches[searchState.currentIndex];
+    if (!match) return;
+
+    const entry = pageEntries[match.pageNumber - 1];
+    if (!entry) return;
+
+    if (currentPage !== match.pageNumber) {
+        suppressScrollTracking = true;
+        setCurrentPage(match.pageNumber);
+        scrollElementIntoContainer(canvasContainer, entry.wrapper, { behavior, align: "start" });
+        window.setTimeout(() => { suppressScrollTracking = false; }, behavior === "smooth" ? 500 : 300);
+    }
+
+    renderSearchHighlightsForPage(entry);
+    const currentBox = entry.searchLayer.querySelector(".search-highlight.current");
+    if (currentBox) {
+        scrollElementIntoContainer(canvasContainer, currentBox, { behavior, align: "nearest" });
+    }
+}
+
+function stepSearch(delta) {
+    if (searchState.matches.length === 0) return;
+    const previousEntry = pageEntries[searchState.matches[searchState.currentIndex]?.pageNumber - 1];
+
+    searchState.currentIndex = (searchState.currentIndex + delta + searchState.matches.length) % searchState.matches.length;
+    updateSearchCount();
+
+    // Only the old and new "current" page's highlight boxes actually change
+    // (the .current class moves) - no need to re-render every page's layer.
+    if (previousEntry) renderSearchHighlightsForPage(previousEntry);
+    goToCurrentMatch();
+}
+
+function openSearchBar() {
+    searchBar.classList.remove("hidden");
+    searchToggleBtn.setAttribute("aria-pressed", "true");
+    searchInput.focus();
+    searchInput.select();
+}
+
+function closeSearchBar() {
+    searchBar.classList.add("hidden");
+    searchToggleBtn.setAttribute("aria-pressed", "false");
+    runSearch("");
+}
+
+searchToggleBtn.addEventListener("click", () => {
+    if (searchBar.classList.contains("hidden")) {
+        openSearchBar();
+    } else {
+        closeSearchBar();
+    }
+});
+
+searchCloseBtn.addEventListener("click", closeSearchBar);
+searchPrevBtn.addEventListener("click", () => stepSearch(-1));
+searchNextBtn.addEventListener("click", () => stepSearch(1));
+
+let searchDebounceHandle = null;
+searchInput.addEventListener("input", () => {
+    window.clearTimeout(searchDebounceHandle);
+    searchDebounceHandle = window.setTimeout(() => runSearch(searchInput.value.trim()), 250);
+});
+
+searchInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+        event.preventDefault();
+        stepSearch(event.shiftKey ? -1 : 1);
+    } else if (event.key === "Escape") {
+        closeSearchBar();
+    }
+});
+
+document.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        openSearchBar();
+    }
+});
 
 // Element.scrollIntoView() is free to adjust *any* scrollable ancestor, not
 // just the one we mean to move - including body, which still has an internal
@@ -630,7 +883,7 @@ document.getElementById("btn-rotate-right").addEventListener("click", () => {
 });
 
 document.addEventListener("keydown", (event) => {
-    if (event.target === pageInput) return;
+    if (event.target === pageInput || event.target === searchInput) return;
     if (event.key === "ArrowLeft") goToPage(currentPage - 1);
     if (event.key === "ArrowRight") goToPage(currentPage + 1);
 });
