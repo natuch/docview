@@ -1,4 +1,4 @@
-namespace PdfEmailViewer.Web.Models;
+namespace DocViewer.Web.Models;
 
 public sealed class DocumentRecord
 {

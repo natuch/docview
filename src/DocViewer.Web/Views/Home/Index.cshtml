@@ -4,7 +4,7 @@
 
 <div class="upload-card">
     <h1>Document Viewer</h1>
-    <p class="subtitle">อัปโหลดไฟล์ PDF หรือ Email (.eml / .msg) เพื่อดูผ่านหน้าเว็บ</p>
+    <p class="subtitle">อัปโหลดไฟล์ PDF, Email, รูปภาพ, Word, Excel, PowerPoint หรือ .txt เพื่อดูผ่านหน้าเว็บ</p>
 
     @if (!ViewData.ModelState.IsValid)
     {
@@ -18,7 +18,7 @@
 
     <form asp-controller="Home" asp-action="Upload" method="post" enctype="multipart/form-data">
         @Html.AntiForgeryToken()
-        <input type="file" name="file" accept=".pdf,.eml,.msg" required />
+        <input type="file" name="file" accept=".pdf,.eml,.msg,.txt,.jpg,.jpeg,.png,.gif,.bmp,.webp,.docx,.xlsx,.doc,.xls,.pptx,.ppt,.odt,.ods" required />
         <button type="submit">เปิดดูเอกสาร</button>
     </form>
 </div>

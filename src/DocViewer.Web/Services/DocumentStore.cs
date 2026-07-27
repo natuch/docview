@@ -1,13 +1,16 @@
 using System.Collections.Concurrent;
-using PdfEmailViewer.Web.Models;
+using DocViewer.Web.Models;
 
-namespace PdfEmailViewer.Web.Services;
+namespace DocViewer.Web.Services;
 
 /// <summary>
 /// In-memory document registry keyed by an opaque id, so the browser never
 /// sees a real file path or name it could use to construct a download URL.
 /// Suitable for a single-instance demo; swap for a distributed cache (Redis)
 /// behind a load balancer.
+/// The 2-hour TTL is a fallback only (crashed tab, browser killed before the
+/// unload beacon fires) - the normal path is an explicit <see cref="Remove"/>
+/// fired by the viewer when the user navigates away, see ViewerController.Release.
 /// </summary>
 public sealed class DocumentStore : IDocumentStore
 {
@@ -37,6 +40,11 @@ public sealed class DocumentStore : IDocumentStore
         }
 
         return null;
+    }
+
+    public void Remove(Guid id)
+    {
+        _documents.TryRemove(id, out _);
     }
 
     private void EvictExpired()

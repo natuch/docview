@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
-using PdfEmailViewer.Web.Services;
+using DocViewer.Web.Services;
 
-namespace PdfEmailViewer.Web.Controllers;
+namespace DocViewer.Web.Controllers;
 
 public sealed class ViewerController : Controller
 {
@@ -48,5 +48,19 @@ public sealed class ViewerController : Controller
         Response.Headers.ContentDisposition = "inline";
 
         return File(document.PdfBytes, "application/pdf");
+    }
+
+    /// <summary>
+    /// Called via <c>navigator.sendBeacon</c> when the viewer page unloads, so the
+    /// converted PDF is dropped from memory as soon as the user is done with it
+    /// rather than lingering for the full TTL fallback window. Beacon requests
+    /// can't read a response, so this always returns 204 regardless of whether
+    /// the id was still present.
+    /// </summary>
+    [HttpPost("/Viewer/{id:guid}/release")]
+    public IActionResult Release(Guid id)
+    {
+        _documentStore.Remove(id);
+        return NoContent();
     }
 }

@@ -1,6 +1,6 @@
 using System.Text;
 using Microsoft.AspNetCore.StaticFiles;
-using PdfEmailViewer.Web.Services;
+using DocViewer.Web.Services;
 
 // .NET Core only ships Unicode/ASCII encodings by default - legacy codepages
 // (Windows-874/Thai, Windows-1252, Shift-JIS, ...) used in .eml/.msg headers
@@ -12,7 +12,7 @@ var builder = WebApplication.CreateBuilder(args);
 // Add services to the container.
 builder.Services.AddControllersWithViews();
 builder.Services.AddSingleton<IDocumentStore, DocumentStore>();
-builder.Services.AddSingleton<IEmailToPdfConverter, EmailToPdfConverter>();
+builder.Services.AddSingleton<IDocumentConverter, DocumentConverter>();
 
 var app = builder.Build();
 

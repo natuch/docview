@@ -1,10 +1,12 @@
-using PdfEmailViewer.Web.Models;
+using DocViewer.Web.Models;
 
-namespace PdfEmailViewer.Web.Services;
+namespace DocViewer.Web.Services;
 
 public interface IDocumentStore
 {
     Guid Save(string displayName, byte[] pdfBytes);
 
     DocumentRecord? Get(Guid id);
+
+    void Remove(Guid id);
 }

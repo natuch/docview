@@ -4,6 +4,15 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = "/lib/pdfjs/pdf.worker.mjs";
 
 const root = document.getElementById("viewer-root");
 const streamUrl = root.dataset.streamUrl;
+const releaseUrl = root.dataset.releaseUrl;
+
+// Drop the converted PDF from server memory as soon as the user is done
+// viewing it, instead of waiting out the multi-hour TTL fallback. pagehide
+// fires reliably on tab close/navigation (unlike beforeunload on mobile),
+// and sendBeacon queues the request to survive the page teardown.
+window.addEventListener("pagehide", () => {
+    navigator.sendBeacon(releaseUrl);
+});
 
 const canvasContainer = document.getElementById("canvas-container");
 const pagesContainer = document.getElementById("pages-container");
