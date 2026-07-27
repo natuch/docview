@@ -18,7 +18,15 @@ A web-based document viewer built with ASP.NET Core MVC and PDF.js. Upload a PDF
 
 - [.NET 9 SDK](https://dotnet.microsoft.com/download)
 - Network access on first email/image/txt upload, so PuppeteerSharp can download headless Chromium (cached afterwards)
-- [LibreOffice](https://www.libreoffice.org/) installed, for Office document (`.docx`/`.xlsx`/etc.) previews — looked for at `/Applications/LibreOffice.app/Contents/MacOS/soffice` (macOS), `/usr/bin/soffice` or `/usr/lib/libreoffice/program/soffice` (Linux), falling back to `soffice` on `PATH`
+- [LibreOffice](https://www.libreoffice.org/) installed, for Office document (`.docx`/`.xlsx`/etc.) previews — looked for at `/Applications/LibreOffice.app/Contents/MacOS/soffice` (macOS), `/usr/bin/soffice` or `/usr/lib/libreoffice/program/soffice` (Linux), `C:\Program Files\LibreOffice\program\soffice.exe` or the `(x86)` equivalent (Windows), falling back to `soffice` on `PATH`
+
+## Deploying to IIS (Windows)
+
+1. Install the [.NET 9 Hosting Bundle](https://dotnet.microsoft.com/download) on the server (not just the SDK/runtime) so IIS can load the ASP.NET Core Module.
+2. Install LibreOffice on the server at one of the paths listed above.
+3. `dotnet publish src/DocViewer.Web -c Release -o <publish-folder>` and point an IIS site/application at `<publish-folder>`. The project's `web.config` is used as the publish template (IIS launcher settings get filled in automatically) and already raises IIS's own upload cap to 500 MB and maps `.mjs` to `text/javascript` — both needed on top of Kestrel-level settings, since IIS's request-filtering and static-file modules sit in front of the app and enforce their own defaults regardless of what the app itself allows.
+4. Make sure the app pool identity can spawn child processes (`soffice.exe`) and write to its temp directory; enabling "Load User Profile" on the app pool avoids some Puppeteer/Chromium first-run issues.
+5. First request that needs email/image/txt conversion downloads headless Chromium via PuppeteerSharp — make sure the server has (temporary, first-run) outbound network access, or pre-warm the Chromium cache as part of the deployment.
 
 ## Getting started
 

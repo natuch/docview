@@ -9,6 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Content Update="web.config" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="MimeKit" Version="4.17.0" />
     <PackageReference Include="MsgReader" Version="6.1.0" />
     <PackageReference Include="NPOI" Version="2.8.0" />

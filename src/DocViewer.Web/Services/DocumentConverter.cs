@@ -275,7 +275,10 @@ public sealed class DocumentConverter : IDocumentConverter
             startInfo.ArgumentList.Add("--headless");
             startInfo.ArgumentList.Add("--nologo");
             startInfo.ArgumentList.Add("--nofirststartwizard");
-            startInfo.ArgumentList.Add($"-env:UserInstallation=file://{profileDir}");
+            // new Uri(...).AbsoluteUri (not raw string interpolation) so this comes out as a
+            // valid file:// URI on Windows too - "file://C:\foo" is not one, LibreOffice
+            // silently fails to apply the isolated profile and conversions collide.
+            startInfo.ArgumentList.Add($"-env:UserInstallation={new Uri(profileDir).AbsoluteUri}");
             startInfo.ArgumentList.Add("--convert-to");
             startInfo.ArgumentList.Add("pdf");
             startInfo.ArgumentList.Add("--outdir");
@@ -348,6 +351,8 @@ public sealed class DocumentConverter : IDocumentConverter
             "/Applications/LibreOffice.app/Contents/MacOS/soffice", // macOS
             "/usr/bin/soffice", // most Linux distros
             "/usr/lib/libreoffice/program/soffice", // some Linux distros
+            @"C:\Program Files\LibreOffice\program\soffice.exe", // Windows, 64-bit install
+            @"C:\Program Files (x86)\LibreOffice\program\soffice.exe", // Windows, 32-bit install
         ];
 
         foreach (var candidate in candidates)
