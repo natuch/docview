@@ -3,6 +3,9 @@ bin/
 obj/
 *.user
 
+## ASP.NET Core Data Protection keys (Program.cs pins these to ContentRootPath/keys)
+src/DocViewer.Web/keys/
+
 ## IDE
 .vs/
 .vscode/

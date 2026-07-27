@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using DocViewer.Web.Models;
 using DocViewer.Web.Services;
@@ -18,30 +20,36 @@ public class HomeController : Controller
     private readonly IDocumentStore _documentStore;
     private readonly IDocumentConverter _documentConverter;
     private readonly IWebHostEnvironment _environment;
+    private readonly IConfiguration _configuration;
 
-    public HomeController(ILogger<HomeController> logger, IDocumentStore documentStore, IDocumentConverter documentConverter, IWebHostEnvironment environment)
+    public HomeController(ILogger<HomeController> logger, IDocumentStore documentStore, IDocumentConverter documentConverter, IWebHostEnvironment environment, IConfiguration configuration)
     {
         _logger = logger;
         _documentStore = documentStore;
         _documentConverter = documentConverter;
         _environment = environment;
+        _configuration = configuration;
     }
 
-    // Lets a developer jump straight to a document during local testing, e.g.
-    // http://localhost:5202/?file=/Users/me/Downloads/sample.msg - skipping
-    // the upload form. Restricted to Development: letting a query string name
-    // an arbitrary server-side file path to read is a classic local-file-read
-    // vulnerability if this were ever exposed beyond a developer's own machine.
-    public async Task<IActionResult> Index([FromQuery] string? file)
+    // Lets a caller open a document by server-side file path directly, e.g.
+    // http://host/?file=<path>&key=<shared-secret> - skipping the upload form.
+    // In Development this works unconditionally (localhost convenience). Outside
+    // Development it requires "key" to match LocalFileAccess:SharedKey, because a
+    // query string naming an arbitrary server-side file path is a classic
+    // local-file-read vulnerability - the shared key restricts it to whichever
+    // internal system is configured to know the secret, not anyone who can guess
+    // or enumerate the URL. If the key isn't configured at all, this path is
+    // denied outright rather than silently falling open.
+    public async Task<IActionResult> Index([FromQuery] string? file, [FromQuery] string? key)
     {
         if (string.IsNullOrWhiteSpace(file))
         {
             return View();
         }
 
-        if (!_environment.IsDevelopment())
+        if (!_environment.IsDevelopment() && !HasValidFileAccessKey(key))
         {
-            ModelState.AddModelError(string.Empty, "การเปิดไฟล์ผ่าน query parameter ใช้ได้เฉพาะโหมด Development เท่านั้น");
+            ModelState.AddModelError(string.Empty, "การเปิดไฟล์ผ่าน query parameter ต้องระบุ key ที่ถูกต้อง");
             return View();
         }
 
@@ -85,6 +93,22 @@ public class HomeController : Controller
         await using var stream = file.OpenReadStream();
         var id = await ProcessDocumentAsync(stream, file.FileName, extension);
         return RedirectToAction("Index", "Viewer", new { id });
+    }
+
+    // Constant-time comparison against LocalFileAccess:SharedKey so response timing
+    // can't be used to brute-force the key one character at a time.
+    private bool HasValidFileAccessKey(string? suppliedKey)
+    {
+        var configuredKey = _configuration["LocalFileAccess:SharedKey"];
+        if (string.IsNullOrEmpty(configuredKey) || string.IsNullOrEmpty(suppliedKey))
+        {
+            return false;
+        }
+
+        var configuredBytes = Encoding.UTF8.GetBytes(configuredKey);
+        var suppliedBytes = Encoding.UTF8.GetBytes(suppliedKey);
+        return configuredBytes.Length == suppliedBytes.Length
+            && CryptographicOperations.FixedTimeEquals(configuredBytes, suppliedBytes);
     }
 
     private async Task<Guid> ProcessDocumentAsync(Stream stream, string fileName, string extension)

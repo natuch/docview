@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.StaticFiles;
 using DocViewer.Web.Services;
 
@@ -13,6 +14,16 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllersWithViews();
 builder.Services.AddSingleton<IDocumentStore, DocumentStore>();
 builder.Services.AddSingleton<IDocumentConverter, DocumentConverter>();
+
+// Under IIS with the default ApplicationPoolIdentity (no loaded user profile), Data
+// Protection falls back to C:\WINDOWS\system32\config\systemprofile\... for its key
+// ring, which the app pool identity can't write to - every antiforgery token
+// generation (i.e. every page with the upload <form>) then throws. Pinning an
+// explicit, app-owned key folder sidesteps the profile lookup entirely; grant the
+// app pool identity (or IIS_IUSRS) write access to this folder on the server.
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(builder.Environment.ContentRootPath, "keys")))
+    .SetApplicationName("DocViewer");
 
 var app = builder.Build();
 
